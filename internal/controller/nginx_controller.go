@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	serverv1alpha1 "github.com/example/nginx-operator/api/v1alpha1"
 )
@@ -66,7 +67,7 @@ type NginxReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/reconcile
 func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// log := log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
 	// Fetch the Nginx instance
 	// The purpose is check if the Custom Resource for the Kind Nginx
@@ -77,11 +78,11 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if apierrors.IsNotFound(err) {
 			// If the custom resource is not found then it usually means that it was deleted or not created
 			// In this way, we will stop the reconciliation
-			//log.Info("nginx resource not found. Ignoring since object must be deleted")
+			log.Info("nginx resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
-		//log.Error(err, "Failed to get nginx")
+		log.Error(err, "Failed to get nginx")
 		return ctrl.Result{}, err
 	}
 
@@ -89,7 +90,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if nginx.Status.Conditions == nil || len(nginx.Status.Conditions) == 0 {
 		meta.SetStatusCondition(&nginx.Status.Conditions, metav1.Condition{Type: typeAvailableNginx, Status: metav1.ConditionUnknown, Reason: "Reconciling", Message: "Starting reconciliation"})
 		if err = r.Status().Update(ctx, nginx); err != nil {
-			//log.Error(err, "Failed to update Nginx status")
+			log.Error(err, "Failed to update Nginx status")
 			return ctrl.Result{}, err
 		}
 
@@ -99,7 +100,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// your changes to the latest version and try again" which would re-trigger the reconciliation
 		// if we try to update it again in the following operations
 		if err := r.Get(ctx, req.NamespacedName, nginx); err != nil {
-			//log.Error(err, "Failed to re-fetch nginx")
+			log.Error(err, "Failed to re-fetch nginx")
 			return ctrl.Result{}, err
 		}
 	}
@@ -111,7 +112,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// Define a new deployment
 		dep, err := r.deploymentForNginx(nginx)
 		if err != nil {
-			//log.Error(err, "Failed to define new Deployment resource for Nginx")
+			log.Error(err, "Failed to define new Deployment resource for Nginx")
 
 			// The following implementation will update the status
 			meta.SetStatusCondition(&nginx.Status.Conditions, metav1.Condition{Type: typeAvailableNginx,
@@ -119,15 +120,15 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				Message: fmt.Sprintf("Failed to create Deployment for the custom resource (%s): (%s)", nginx.Name, err)})
 
 			if err := r.Status().Update(ctx, nginx); err != nil {
-				//log.Error(err, "Failed to update Nginx status")
+				log.Error(err, "Failed to update Nginx status")
 				return ctrl.Result{}, err
 			}
 
 			return ctrl.Result{}, err
 		}
 
-		//log.Info("Creating a new Deployment",
-		//"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+		log.Info("Creating a new Deployment",
+			"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
 		if err = r.Create(ctx, dep); err != nil {
 			//log.Error(err, "Failed to create new Deployment",
 			//"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
@@ -139,7 +140,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// and move forward for the next operations
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	} else if err != nil {
-		//log.Error(err, "Failed to get Deployment")
+		log.Error(err, "Failed to get Deployment")
 		// Let's return the error for the reconciliation be re-trigged again
 		return ctrl.Result{}, err
 	}
@@ -147,29 +148,17 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	currentImage := found.Spec.Template.Spec.Containers[0].Image
 	desiredImage := "bitnami/nginx:" + nginx.Spec.Version
 	if currentImage != desiredImage {
-		//log.Info("Image version mismatch, deleting and recreating deployment",
-		//"currentImage", currentImage, "desiredImage", desiredImage)
+		log.Info("Image version mismatch, deleting and recreating deployment",
+			"currentImage", currentImage, "desiredImage", desiredImage)
 
-		// Delete the existing deployment
-		if err := r.Delete(ctx, found); err != nil {
-			//log.Error(err, "Failed to delete existing Deployment")
+		found.Spec.Template.Spec.Containers[0].Image = desiredImage
+		if err = r.Update(ctx, found); err != nil {
+			log.Error(err, "Failed to update Deployment image",
+				"Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
 			return ctrl.Result{}, err
 		}
 
-		// Create a new deployment with the correct image version
-		dep, err := r.deploymentForNginx(nginx)
-		if err != nil {
-			//log.Error(err, "Failed to define new Deployment resource for Nginx")
-			return ctrl.Result{}, err
-		}
-
-		if err = r.Create(ctx, dep); err != nil {
-			//log.Error(err, "Failed to create new Deployment",
-			//"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-			return ctrl.Result{}, err
-		}
-
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// The CRD API defines that the Nginx type have a NginxSpec.Size field
@@ -181,15 +170,15 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if *found.Spec.Replicas != size {
 		found.Spec.Replicas = &size
 		if err = r.Update(ctx, found); err != nil {
-			//log.Error(err, "Failed to update Deployment",
-			//"Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
+			log.Error(err, "Failed to update Deployment",
+				"Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
 
 			// Re-fetch the nginx Custom Resource before updating the status
 			// so that we have the latest state of the resource on the cluster and we will avoid
 			// raising the error "the object has been modified, please apply
 			// your changes to the latest version and try again" which would re-trigger the reconciliation
 			if err := r.Get(ctx, req.NamespacedName, nginx); err != nil {
-				//log.Error(err, "Failed to re-fetch nginx")
+				log.Error(err, "Failed to re-fetch nginx")
 				return ctrl.Result{}, err
 			}
 
@@ -199,7 +188,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				Message: fmt.Sprintf("Failed to update the size for the custom resource (%s): (%s)", nginx.Name, err)})
 
 			if err := r.Status().Update(ctx, nginx); err != nil {
-				//log.Error(err, "Failed to update Nginx status")
+				log.Error(err, "Failed to update Nginx status")
 				return ctrl.Result{}, err
 			}
 
@@ -218,7 +207,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		Message: fmt.Sprintf("Deployment for custom resource (%s) with %d replicas created successfully", nginx.Name, size)})
 
 	if err := r.Status().Update(ctx, nginx); err != nil {
-		//log.Error(err, "Failed to update Nginx status")
+		log.Error(err, "Failed to update Nginx status")
 		return ctrl.Result{}, err
 	}
 
