@@ -7,5 +7,5 @@ metadata:
   name: nginx-sample
 spec:
   # TODO(user): Add fields here
-  size: 3
-  version: "1.27.3"
+  size: 2
+  version: "1.26.2"
