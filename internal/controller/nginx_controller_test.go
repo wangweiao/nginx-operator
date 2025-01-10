@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -52,6 +53,10 @@ var _ = Describe("Nginx Controller", func() {
 						Namespace: "default",
 					},
 					// TODO(user): Specify other spec details if needed.
+					Spec: serverv1alpha1.NginxSpec{
+						Size:    1,
+						Version: "1.21.1",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -66,6 +71,7 @@ var _ = Describe("Nginx Controller", func() {
 			By("Cleanup the specific resource instance Nginx")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
+
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &NginxReconciler{
@@ -79,6 +85,38 @@ var _ = Describe("Nginx Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			deployment := &appsv1.Deployment{}
+			err = k8sClient.Get(ctx, typeNamespacedName, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("bitnami/nginx:1.21.1"))
 		})
+
+		It("should update the deployment when the Nginx version changes", func() {
+			By("Updating the Nginx version")
+			err := k8sClient.Get(ctx, typeNamespacedName, nginx)
+			Expect(err).NotTo(HaveOccurred())
+
+			nginx.Spec.Version = "1.21.2"
+			Expect(k8sClient.Update(ctx, nginx)).To(Succeed())
+
+			By("Reconciling the updated resource")
+			controllerReconciler := &NginxReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the deployment image is updated
+			deployment := &appsv1.Deployment{}
+			err = k8sClient.Get(ctx, typeNamespacedName, deployment)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("bitnami/nginx:1.21.2"))
+		})
+
 	})
 })
