@@ -17,15 +17,48 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	serverv1alpha1 "github.com/example/nginx-operator/api/v1alpha1"
 	"github.com/example/nginx-operator/test/utils"
 )
+
+var (
+	k8sClient client.Client
+	cfg       *rest.Config
+)
+
+var _ = BeforeSuite(func() {
+	var err error
+	// Set up the Kubernetes client configuration
+	cfg, err = ctrl.GetConfig()
+	Expect(err).NotTo(HaveOccurred())
+
+	// Add the custom resource scheme to the client
+	err = serverv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Create a new client for interacting with the cluster
+	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	Expect(err).NotTo(HaveOccurred())
+})
+
+var _ = AfterSuite(func() {
+	// Perform any necessary cleanup after all tests
+})
 
 const namespace = "nginx-operator-system"
 
@@ -119,4 +152,45 @@ var _ = Describe("controller", Ordered, func() {
 
 		})
 	})
+
+	Context("Nginx Custom Resource", func() {
+		It("should create a Deployment with the specified properties", func() {
+			nginxName := "test-nginx"
+			nginxNamespace := namespace
+			nginxVersion := "1.21.0"
+			nginxSize := int32(2)
+
+			By("creating a Nginx custom resource")
+			nginx := &serverv1alpha1.Nginx{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      nginxName,
+					Namespace: nginxNamespace,
+				},
+				Spec: serverv1alpha1.NginxSpec{
+					Version: nginxVersion,
+					Size:    nginxSize,
+				},
+			}
+			Expect(k8sClient.Create(context.Background(), nginx)).To(Succeed())
+
+			By("verifying the Deployment is created")
+			deployment := &appsv1.Deployment{}
+			Eventually(func() error {
+				return k8sClient.Get(context.Background(), types.NamespacedName{
+					Name:      nginxName,
+					Namespace: nginxNamespace,
+				}, deployment)
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the Deployment has the correct image")
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("bitnami/nginx:" + nginxVersion))
+
+			By("verifying the Deployment has the correct number of replicas")
+			Expect(*deployment.Spec.Replicas).To(Equal(nginxSize))
+
+			// Cleanup
+			Expect(k8sClient.Delete(context.Background(), nginx)).To(Succeed())
+		})
+	})
+
 })

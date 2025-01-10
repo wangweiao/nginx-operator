@@ -74,8 +74,8 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated 
 		echo "Kind is not installed. Please install Kind manually."; \
 		exit 1; \
 	}
-	@kind get clusters | grep -q 'kind' || { \
-		echo "No Kind cluster is running. Please start a Kind cluster before running the e2e tests."; \
+	@kind get clusters | grep -q 'cluster' || { \
+		echo "No Kind cluster named 'cluster' is running. Please start the cluster before running the e2e tests."; \
 		exit 1; \
 	}
 	go test ./test/e2e/ -v -ginkgo.v
